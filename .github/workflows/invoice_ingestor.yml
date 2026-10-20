@@ -35,4 +35,4 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
-          python scripts/2_invoice_ingestor.py
+          python invoice_ingestor.py
