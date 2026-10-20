@@ -46,8 +46,20 @@ def get_table(base_name):
     if base_name in ["strategies", "platform_profile", "user_registry"]: return base_name
     return f"{base_name}_dev"
 
+# [MODULE/CLASS SSOT ROLE]: Authentication Gateway
+# [FUNCTION CONTRACT & MATH]: Parses GitHub Secrets JSON and reconstructs RSA private keys for secure Google Drive API handshakes.
 def get_drive_token():
+    # [TECHNICAL]: Loads the raw JSON credential string from the environment into a dictionary.
+    # [TRADING DOMAIN]: Extracts the Google Cloud Identity needed to securely access the private invoice folders.
     SERVICE_ACCOUNT_INFO = json.loads(os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON"))
+    
+    # [TECHNICAL]: Replaces escaped newline string literals (\\n) with structural line breaks (\n).
+    # [TRADING DOMAIN]: Fixes the PEM formatting corruption caused by GitHub Secrets, allowing the cryptography library to parse the key.
+    if "private_key" in SERVICE_ACCOUNT_INFO:
+        SERVICE_ACCOUNT_INFO["private_key"] = SERVICE_ACCOUNT_INFO["private_key"].replace('\\n', '\n')
+        
+    # [TECHNICAL]: Initializes the credential scope and refreshes the ephemeral OAuth token.
+    # [TRADING DOMAIN]: Finalizes the secure connection handshake before polling for PDFs.
     SCOPES = ['https://www.googleapis.com/auth/drive']
     creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
     auth_request = google.auth.transport.requests.Request()
