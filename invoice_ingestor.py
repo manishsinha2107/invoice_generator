@@ -1,4 +1,3 @@
-# --- AFTER (PATCHED CODE | File: invoice_ingestor.py | Lines 1 to 216) ---
 # [MODULE/CLASS SSOT ROLE]: Autonomous Invoice Extractor & Ledger Injector
 # [FUNCTION CONTRACT & MATH]: Parses PDFs, queries platform taxes, writes to ledger with dynamic environment routing, and dispatches alerts.
 
@@ -124,17 +123,18 @@ def run_invoice_ingestion():
         with pdfplumber.open(io.BytesIO(file_res.content)) as pdf:
             text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
-        # [TECHNICAL]: Robust regex extraction mapping exactly to Tradetron PDF formats.
-        # [TRADING DOMAIN]: Isolates the unique external identity of the bill and the raw HWM value directly from the source PDF.
+        # [MODULE/CLASS SSOT ROLE]: Robust PDF Text Parser
+        # [FUNCTION CONTRACT & MATH]: Uses flexible, case-insensitive regex to extract billing metadata from Tradetron PDFs.
         email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
-        inv_match = re.search(r'Invoice no.\s*\|\s*(\d+)', text)
-        hwm_match = re.search(r'High-water mark Rs\s*([\d.]+)', text)
-        tot_match = re.search(r'Grand Total\s*Rs\s*([\d.]+)', text)
-        strat_match = re.search(r"in\s+'(.*?)'\s+strategy", text)
-        cycle_match = re.search(r'Variable Fee Invoice for\s*(.*?\d{4})', text)
+        inv_match = re.search(r'Invoice\s*no\.?\s*[:\|]\s*(\d+)', text, re.IGNORECASE)
+        hwm_match = re.search(r'High[- ]water\s*mark\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
+        tot_match = re.search(r'Grand\s*Total\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
+        strat_match = re.search(r"(?:in|for)\s+'(.*?)'\s+strategy", text, re.IGNORECASE)
+        cycle_match = re.search(r'Variable\s*Fee\s*Invoice\s*for\s*(.*?\d{4})', text, re.IGNORECASE)
 
         if not (email_match and inv_match and hwm_match and strat_match):
             print(f"❌ Extraction Failed for {file_name}. Skipping.")
+            print(f"--- DEBUG EXTRACTED TEXT START ---\n{text}\n--- DEBUG EXTRACTED TEXT END ---")
             continue
 
         tt_email = email_match.group(1).lower()
