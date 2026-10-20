@@ -1,4 +1,4 @@
-# --- AFTER (PATCHED CODE | File: scripts/2_invoice_ingestor.py | Lines 1 to 216) ---
+# --- AFTER (PATCHED CODE | File: invoice_ingestor.py | Lines 1 to 216) ---
 # [MODULE/CLASS SSOT ROLE]: Autonomous Invoice Extractor & Ledger Injector
 # [FUNCTION CONTRACT & MATH]: Parses PDFs, queries platform taxes, writes to ledger with dynamic environment routing, and dispatches alerts.
 
@@ -12,6 +12,8 @@ import platform
 import hashlib
 from datetime import datetime
 
+# [TECHNICAL]: Self-installing dependencies block.
+# [TRADING DOMAIN]: Ensures GitHub Actions runners automatically acquire required parsing and database libraries.
 def install_if_missing():
     REQS = ["requests", "google-auth", "supabase", "pdfplumber"]
     try:
@@ -28,6 +30,8 @@ import google.auth.transport.requests
 from supabase import create_client, Client
 import pdfplumber
 
+# [TECHNICAL]: Environmental configuration loading.
+# [TRADING DOMAIN]: Ingests GitHub Secrets dynamically to protect operational infrastructure credentials.
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SOURCE_FOLDER = os.environ.get("INVOICE_SOURCE_FOLDER")
@@ -38,35 +42,38 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# [TECHNICAL]: SSOT table name resolver based on environment flag.
-# [TRADING DOMAIN]: Ensures test PDFs parse to dev tables, and production PDFs route to live ledgers securely.
+# [TECHNICAL]: Global integrity check to mirror your reference script exactly.
+# [TRADING DOMAIN]: Prevents execution if critical routing variables are missing.
+if not all([SUPABASE_URL, SUPABASE_KEY, SOURCE_FOLDER, DEST_FOLDER]):
+    print("❌ ERROR: Missing Environment Variables")
+    sys.exit(1)
+
+# [TECHNICAL]: Global JSON parsing and Scope declaration, matching the exact structure of scripts/1_trade_ingestor.py.
+# [TRADING DOMAIN]: Eliminates parsing anomalies by deferring cleanly to the google-auth library's native handlers.
+SERVICE_ACCOUNT_INFO = json.loads(os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON"))
+SCOPES = ['https://www.googleapis.com/auth/drive']
+
+# [FUNCTION CONTRACT & MATH]: Environment Table Router
 def get_table(base_name):
+    # [TECHNICAL]: Checks the ENVIRONMENT flag to append _dev suffixes dynamically.
+    # [TRADING DOMAIN]: Ensures test PDFs parse to dev tables, and production PDFs route to live ledgers securely.
     if ENVIRONMENT == "production": return base_name
-    # Exclude tables that don't have dev counterparts
     if base_name in ["strategies", "platform_profile", "user_registry"]: return base_name
     return f"{base_name}_dev"
 
-# [MODULE/CLASS SSOT ROLE]: Authentication Gateway
-# [FUNCTION CONTRACT & MATH]: Parses GitHub Secrets JSON and reconstructs RSA private keys for secure Google Drive API handshakes.
+# [FUNCTION CONTRACT & MATH]: Authentication Gateway
 def get_drive_token():
-    # [TECHNICAL]: Loads the raw JSON credential string from the environment into a dictionary.
-    # [TRADING DOMAIN]: Extracts the Google Cloud Identity needed to securely access the private invoice folders.
-    SERVICE_ACCOUNT_INFO = json.loads(os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON"))
-    
-    # [TECHNICAL]: Replaces escaped newline string literals (\\n) with structural line breaks (\n).
-    # [TRADING DOMAIN]: Fixes the PEM formatting corruption caused by GitHub Secrets, allowing the cryptography library to parse the key.
-    if "private_key" in SERVICE_ACCOUNT_INFO:
-        SERVICE_ACCOUNT_INFO["private_key"] = SERVICE_ACCOUNT_INFO["private_key"].replace('\\n', '\n')
-        
-    # [TECHNICAL]: Initializes the credential scope and refreshes the ephemeral OAuth token.
+    # [TECHNICAL]: Instantiates OAuth token using globally parsed JSON credentials.
     # [TRADING DOMAIN]: Finalizes the secure connection handshake before polling for PDFs.
-    SCOPES = ['https://www.googleapis.com/auth/drive']
     creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
     auth_request = google.auth.transport.requests.Request()
     creds.refresh(auth_request)
     return creds.token
 
+# [FUNCTION CONTRACT & MATH]: Telegram Dispatcher
 def send_telegram(chat_id, text):
+    # [TECHNICAL]: POST request to Telegram API.
+    # [TRADING DOMAIN]: Delivers instant mobile billing notifications to mapped clients.
     if not chat_id or chat_id == 'NA': return False
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -74,7 +81,10 @@ def send_telegram(chat_id, text):
         return True
     except: return False
 
+# [FUNCTION CONTRACT & MATH]: Email Dispatcher
 def send_email(to_email, subject, html_body):
+    # [TECHNICAL]: POST request to Resend API.
+    # [TRADING DOMAIN]: Serves as the primary alert channel for unmapped users, or the fallback channel if Telegram fails.
     if not RESEND_API_KEY: return False
     try:
         requests.post("https://api.resend.com/emails", headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
@@ -82,6 +92,7 @@ def send_email(to_email, subject, html_body):
         return True
     except: return False
 
+# [FUNCTION CONTRACT & MATH]: Core Processing Loop
 def run_invoice_ingestion():
     token = get_drive_token()
     headers = {"Authorization": f"Bearer {token}"}
@@ -92,7 +103,8 @@ def run_invoice_ingestion():
         print("✅ Idle: No new invoices found.")
         return
 
-    # Cache configurations
+    # [TECHNICAL]: Retrieve global SSOT tax metrics from platform_profile.
+    # [TRADING DOMAIN]: Eliminates hardcoded mathematical drift by utilizing the central database config.
     pf_res = supabase.table("platform_profile").select("cgst_pct,sgst_pct,due_days_count").eq("id", 1).execute()
     pf_data = pf_res.data[0] if pf_res.data else {}
     cgst_pct = float(pf_data.get("cgst_pct", 0.09))
@@ -113,7 +125,7 @@ def run_invoice_ingestion():
             text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
         # [TECHNICAL]: Robust regex extraction mapping exactly to Tradetron PDF formats.
-        # [TRADING DOMAIN]: Automatically isolates the unique external identity of the bill and the raw HWM value.
+        # [TRADING DOMAIN]: Isolates the unique external identity of the bill and the raw HWM value directly from the source PDF.
         email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
         inv_match = re.search(r'Invoice no.\s*\|\s*(\d+)', text)
         hwm_match = re.search(r'High-water mark Rs\s*([\d.]+)', text)
@@ -137,14 +149,16 @@ def run_invoice_ingestion():
             print(f"⚠️ Strategy '{strat_name}' not active in DB. Skipping.")
             continue
 
+        # [TECHNICAL]: Execute mathematical tax calculations.
+        # [TRADING DOMAIN]: Replicates exact Node.js backend math to calculate user dues.
         fee_pct = float(target_strat['monthly_fees'])
         base_fee = hwm_val * fee_pct
         sgst = base_fee * sgst_pct
         cgst = base_fee * cgst_pct
         final_inr = round(base_fee + sgst + cgst)
 
-        # [TECHNICAL]: Identifies Mapped vs Unmapped clients dynamically.
-        # [TRADING DOMAIN]: Ensures bills correctly attach to Website accounts without generating duplicate fractured 'NA' rows.
+        # [TECHNICAL]: Dynamic identity bridging.
+        # [TRADING DOMAIN]: Ensures bills correctly attach to internal Website accounts without generating duplicate fractured 'NA' rows for active users.
         subs_table = get_table('tradetron_active_subscribers')
         id_res = supabase.table(subs_table).select("user_email,tt_profile_name").eq("tradetron_user_id", tt_email).execute()
         
@@ -190,10 +204,12 @@ def run_invoice_ingestion():
         }
 
         # [TECHNICAL]: Write isolated row with exact Tradetron Invoice ID.
+        # [TRADING DOMAIN]: Writes the final ledger entry to Supabase so it can be reconciled against later.
         ledger_table = get_table('strategy_ledger')
         ins_res = supabase.table(ledger_table).upsert(ledger_payload, on_conflict="invoice_batch_id,external_invoice_id").execute()
         
         # [TECHNICAL]: Notifications engine
+        # [TRADING DOMAIN]: Sends localized alerts pointing the user to the correct environment dashboard.
         dashboard_url = "https://ensuringsuccess.in/algo#billing" if ENVIRONMENT == "production" else "https://dev.ensuringsuccess.in/algo#billing"
         prefix = "" if ENVIRONMENT == "production" else "[DEV] "
         amt_fmt = f"₹{final_inr:,.2f}"
@@ -203,7 +219,8 @@ def run_invoice_ingestion():
         if not send_telegram(tg_chat_id, tg_msg):
             send_email(user_email if user_email != 'NA' else tt_email, f"{prefix}Action Required: Invoice {inv_no} Generated", tg_msg.replace('\n', '<br>'))
 
-        # Move file out of source directory
+        # [TECHNICAL]: Move file out of source directory
+        # [TRADING DOMAIN]: Archives the processed PDF so it is not double-processed on the next run.
         print(f"✅ Ingested Invoice {inv_no}. Moving file.")
         requests.patch(f"https://www.googleapis.com/drive/v3/files/{file_id}?addParents={DEST_FOLDER}&removeParents={SOURCE_FOLDER}", headers=headers)
 
