@@ -111,13 +111,15 @@ def run_invoice_ingestion():
         with pdfplumber.open(io.BytesIO(file_res.content)) as pdf:
             text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
+        # [MODULE/CLASS SSOT ROLE]: Robust PDF Text Parser
+        # [FUNCTION CONTRACT & MATH]: Uses flexible, case-insensitive regex to extract billing metadata from Tradetron PDFs.
         email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
-        # [TECHNICAL]: Made the pipe/colon separator completely optional.
         inv_match = re.search(r'Invoice\s*no\.?\s*(?:[:\|]\s*)?(\d+)', text, re.IGNORECASE)
         hwm_match = re.search(r'High[- ]water\s*mark\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
         tot_match = re.search(r'Grand\s*Total\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
-        # [TECHNICAL]: Dropped strict 'in' prefix requirement to survive spatial text wrapping fragmentation.
-        strat_match = re.search(r"'(.*?)'\s+strategy", text, re.IGNORECASE)
+        # [TECHNICAL]: Capture group changed from (.*?) to ([^']*) to greedily capture across newlines and injected garbage.
+        # [TRADING DOMAIN]: Ensures strategy names containing injected monetary amounts (like 'Vedika Rs 519.00 Nifty') are fully captured for later sanitization.
+        strat_match = re.search(r"'([^']*)'\s+strategy", text, re.IGNORECASE)
         cycle_match = re.search(r'Variable\s*Fee\s*Invoice\s*for\s*(.*?\d{4})', text, re.IGNORECASE)
 
         if not (email_match and inv_match and hwm_match and strat_match):
@@ -127,9 +129,18 @@ def run_invoice_ingestion():
 
         tt_email = email_match.group(1).lower()
         inv_no = inv_match.group(1)
-        hwm_val = float(hwm_match.group(1))
-        pdf_total = float(tot_match.group(1)) if tot_match else 0.0
-        strat_name = strat_match.group(1).strip()
+        
+        # [TECHNICAL]: Scrubs numeric strings of commas before casting to float.
+        # [TRADING DOMAIN]: Prevents catastrophic failures on high-value HWMs (e.g. Rs 5,190.25).
+        hwm_val = float(hwm_match.group(1).replace(',', ''))
+        pdf_total = float(tot_match.group(1).replace(',', '')) if tot_match else 0.0
+        
+        # [TECHNICAL]: RegEx substitution dynamically scrubs any nested 'Rs XX.XX' fragments and collapses multi-line text into a single space.
+        # [TRADING DOMAIN]: Rebuilds the true Strategy Name back to 'Vedika Nifty Intraday Buying' so it maps perfectly to the live database lookup.
+        raw_strat_name = strat_match.group(1)
+        clean_strat_name = re.sub(r'Rs\.?\s*[\d,.]+', '', raw_strat_name, flags=re.IGNORECASE)
+        strat_name = re.sub(r'\s+', ' ', clean_strat_name).strip()
+        
         cycle_str = cycle_match.group(1).strip() if cycle_match else "NA"
         
         target_strat = strat_map.get(strat_name.lower())
