@@ -179,16 +179,7 @@ def run_invoice_ingestion():
                 if reg_res.data:
                     tg_chat_id = reg_res.data[0].get("telegram_chat_id", 'NA')
                     tg_username = reg_res.data[0].get("telegram_username")
-        else:
-            # Unmapped user logic: inject dummy vault tracking row
-            vault_table = get_table('subscriber_vault')
-            supabase.table(vault_table).upsert({
-                "user_email": "NA", "product_code": "ALGO_SUBSCRIPTION", "broker_name": strat_name,
-                "user_id": "NA", "password": "NA", "totp_key": "NA", "tradetron_password": "NA",
-                "tradetron_user_id": tt_email, "tt_profile_name": "Unmapped", "status": "active"
-            }, on_conflict="user_email,broker_name").execute()
 
-        # Batch hash to group multiple PDFs from the same user/cycle into one web card while keeping rows distinct
         batch_hash_str = f"{tt_email}_{cycle_str}"
         batch_id = 'INV-' + hashlib.md5(batch_hash_str.encode()).hexdigest()[:8].upper()
         
@@ -206,10 +197,15 @@ def run_invoice_ingestion():
             "invoice_generated_at": datetime.now().isoformat()
         }
 
-        # [TECHNICAL]: Write isolated row with exact Tradetron Invoice ID.
-        # [TRADING DOMAIN]: Writes the final ledger entry to Supabase so it can be reconciled against later.
+
         ledger_table = get_table('strategy_ledger')
-        ins_res = supabase.table(ledger_table).upsert(ledger_payload, on_conflict="invoice_batch_id,external_invoice_id").execute()
+        check_res = supabase.table(ledger_table).select("id").eq("external_invoice_id", inv_no).execute()
+        
+        if check_res.data and len(check_res.data) > 0:
+            target_id = check_res.data[0]['id']
+            supabase.table(ledger_table).update(ledger_payload).eq("id", target_id).execute()
+        else:
+            supabase.table(ledger_table).insert(ledger_payload).execute()
         
         # [TECHNICAL]: Notifications engine
         # [TRADING DOMAIN]: Sends localized alerts pointing the user to the correct environment dashboard.
