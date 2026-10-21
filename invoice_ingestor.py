@@ -98,8 +98,12 @@ def run_invoice_ingestion():
     sgst_pct = float(pf_data.get("sgst_pct", 0.09))
     due_days = int(pf_data.get("due_days_count", 2))
 
-    strat_res = supabase.table("strategies").select("strategy_id,strategy_name,monthly_fees").eq("status", "Active").execute()
-    strat_map = {s['strategy_name'].lower().strip(): s for s in strat_res.data}
+    # [MODULE/CLASS SSOT ROLE]: Ledger Mapping Cache
+    # [FUNCTION CONTRACT & MATH]: Pre-fetches strictly eligible (Live Auto, Active) strategies into memory to prevent ghost billing.
+    # [TECHNICAL]: Extends constraints to block paper/demo tracking, and pulls 'strategy_full_name' for precise PDF regex alignment.
+    # [TRADING DOMAIN]: Enforces the business rule that only active, fully subscribed Live deployments can trigger automated invoices.
+    strat_res = supabase.table("strategies").select("strategy_id,strategy_name,strategy_full_name,monthly_fees").eq("status", "Active").eq("subscription_status", "Active").eq("deployment_type", "Live Auto").execute()
+    strat_map = {s['strategy_full_name'].lower().strip(): s for s in strat_res.data if s.get('strategy_full_name')}
 
     for idx, f in enumerate(files):
         file_id, file_name = f['id'], f['name']
