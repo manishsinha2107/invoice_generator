@@ -22,6 +22,13 @@ jobs:
         with:
           python-version: '3.10'
           
+      # [TECHNICAL]: Explicitly separates dependency installation from script execution.
+      # [TRADING DOMAIN]: Ensures execution logs are pristine and focused entirely on invoice ingestion outputs.
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests google-auth supabase pdfplumber
+          
       # [TECHNICAL]: Maps GitHub repository secrets into the isolated runner environment, protecting keys from source control.
       # [TRADING DOMAIN]: Connects the isolated backend worker to the live Supabase ledger, automated notification APIs, and Google Drive repositories.
       - name: Run Invoice Ingestor
@@ -31,7 +38,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           INVOICE_SOURCE_FOLDER: ${{ secrets.INVOICE_SOURCE_FOLDER }}
           INVOICE_DEST_FOLDER: ${{ secrets.INVOICE_DEST_FOLDER }}
-          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: '${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
