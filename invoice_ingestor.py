@@ -13,24 +13,12 @@ from datetime import datetime
 
 # [TECHNICAL]: Self-installing dependencies block.
 # [TRADING DOMAIN]: Ensures GitHub Actions runners automatically acquire required parsing and database libraries.
-def install_if_missing():
-    REQS = ["requests", "google-auth", "supabase", "pdfplumber"]
-    try:
-        import requests, google.oauth2, supabase, pdfplumber
-    except ImportError:
-        print("📦 Missing libraries detected. Installing self-dependencies...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", *REQS])
-
-install_if_missing()
-
 import requests
 from google.oauth2 import service_account
 import google.auth.transport.requests
 from supabase import create_client, Client
 import pdfplumber
 
-# [TECHNICAL]: Environmental configuration loading.
-# [TRADING DOMAIN]: Ingests GitHub Secrets dynamically to protect operational infrastructure credentials.
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SOURCE_FOLDER = os.environ.get("INVOICE_SOURCE_FOLDER")
@@ -123,13 +111,13 @@ def run_invoice_ingestion():
         with pdfplumber.open(io.BytesIO(file_res.content)) as pdf:
             text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
-        # [MODULE/CLASS SSOT ROLE]: Robust PDF Text Parser
-        # [FUNCTION CONTRACT & MATH]: Uses flexible, case-insensitive regex to extract billing metadata from Tradetron PDFs.
         email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
-        inv_match = re.search(r'Invoice\s*no\.?\s*[:\|]\s*(\d+)', text, re.IGNORECASE)
+        # [TECHNICAL]: Made the pipe/colon separator completely optional.
+        inv_match = re.search(r'Invoice\s*no\.?\s*(?:[:\|]\s*)?(\d+)', text, re.IGNORECASE)
         hwm_match = re.search(r'High[- ]water\s*mark\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
         tot_match = re.search(r'Grand\s*Total\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
-        strat_match = re.search(r"(?:in|for)\s+'(.*?)'\s+strategy", text, re.IGNORECASE)
+        # [TECHNICAL]: Dropped strict 'in' prefix requirement to survive spatial text wrapping fragmentation.
+        strat_match = re.search(r"'(.*?)'\s+strategy", text, re.IGNORECASE)
         cycle_match = re.search(r'Variable\s*Fee\s*Invoice\s*for\s*(.*?\d{4})', text, re.IGNORECASE)
 
         if not (email_match and inv_match and hwm_match and strat_match):
