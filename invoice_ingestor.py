@@ -9,7 +9,7 @@ import json
 import io
 import platform
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # [TECHNICAL]: Self-installing dependencies block.
 # [TRADING DOMAIN]: Ensures GitHub Actions runners automatically acquire required parsing and database libraries.
@@ -57,27 +57,33 @@ def get_drive_token():
     creds.refresh(auth_request)
     return creds.token
 
+# --- AFTER (PATCHED CODE | File: invoice_ingestor.py | Lines 53 to 79) ---
 # [FUNCTION CONTRACT & MATH]: Telegram Dispatcher
 def send_telegram(chat_id, text):
-    # [TECHNICAL]: POST request to Telegram API.
-    # [TRADING DOMAIN]: Delivers instant mobile billing notifications to mapped clients.
-    if not chat_id or chat_id == 'NA': return False
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True})
-        return True
-    except: return False
+    # [TECHNICAL]: Validates HTTP status code from Telegram Bot API instead of blindly returning True or silently swallowing errors.
+    # [TRADING DOMAIN]: Ensures failed Telegram alerts accurately trigger the Resend email fallback so clients never miss an invoice.
+    if not chat_id or chat_id == 'NA' or not TELEGRAM_BOT_TOKEN: return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    res = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True})
+    if not res.ok:
+        print(f"⚠️ Telegram API Error ({res.status_code}): {res.text}")
+        return False
+    return True
 
 # [FUNCTION CONTRACT & MATH]: Email Dispatcher
 def send_email(to_email, subject, html_body):
-    # [TECHNICAL]: POST request to Resend API.
-    # [TRADING DOMAIN]: Serves as the primary alert channel for unmapped users, or the fallback channel if Telegram fails.
-    if not RESEND_API_KEY: return False
-    try:
-        requests.post("https://api.resend.com/emails", headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                      json={"from": "Ensuring Success <support@ensuringsuccess.in>", "to": [to_email], "subject": subject, "html": html_body})
-        return True
-    except: return False
+    # [TECHNICAL]: Validates HTTP status code from Resend API and logs explicit rejection reasons.
+    # [TRADING DOMAIN]: Guarantees auditability in GitHub Actions logs if an unmapped user's invoice email fails to dispatch.
+    if not RESEND_API_KEY or not to_email or to_email == 'NA': return False
+    res = requests.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+        json={"from": "Ensuring Success <support@ensuringsuccess.in>", "to": [to_email], "subject": subject, "html": html_body}
+    )
+    if not res.ok:
+        print(f"⚠️ Resend API Error ({res.status_code}): {res.text}")
+        return False
+    return True
 
 # [FUNCTION CONTRACT & MATH]: Core Processing Loop
 def run_invoice_ingestion():
@@ -90,20 +96,34 @@ def run_invoice_ingestion():
         print("✅ Idle: No new invoices found.")
         return
 
-    # [TECHNICAL]: Retrieve global SSOT tax metrics from platform_profile.
-    # [TRADING DOMAIN]: Eliminates hardcoded mathematical drift by utilizing the central database config.
+    # [TECHNICAL]: Retrieve global SSOT tax metrics from platform_profile with strict validation (zero hardcoded fallbacks).
+    # [TRADING DOMAIN]: Enforces that tax rates and payment grace periods are strictly governed by the central database configuration.
     pf_res = supabase.table("platform_profile").select("cgst_pct,sgst_pct,due_days_count").eq("id", 1).execute()
-    pf_data = pf_res.data[0] if pf_res.data else {}
-    cgst_pct = float(pf_data.get("cgst_pct", 0.09))
-    sgst_pct = float(pf_data.get("sgst_pct", 0.09))
-    due_days = int(pf_data.get("due_days_count", 2))
+    if not pf_res.data:
+        raise RuntimeError("❌ CRITICAL: platform_profile (id=1) missing in database.")
+    pf_data = pf_res.data[0]
+    cgst_pct = float(pf_data["cgst_pct"])
+    sgst_pct = float(pf_data["sgst_pct"])
+    due_days = int(pf_data["due_days_count"])
 
     # [MODULE/CLASS SSOT ROLE]: Ledger Mapping Cache
-    # [FUNCTION CONTRACT & MATH]: Pre-fetches strictly eligible (Live Auto, Active) strategies into memory to prevent ghost billing.
-    # [TECHNICAL]: Extends constraints to block paper/demo tracking, and pulls 'strategy_full_name' for precise PDF regex alignment.
-    # [TRADING DOMAIN]: Enforces the business rule that only active, fully subscribed Live deployments can trigger automated invoices.
+    # [FUNCTION CONTRACT & MATH]: Pre-fetches strictly eligible (Live Auto, Active, Subscribed) strategies keyed by strategy_full_name.
+    # [TECHNICAL]: Queries strategy_id, strategy_full_name, and monthly_fees for active live deployments.
+    # [TRADING DOMAIN]: Enforces that only active, subscribed Live Auto strategies are eligible for automated invoice ingestion.
     strat_res = supabase.table("strategies").select("strategy_id,strategy_name,strategy_full_name,monthly_fees").eq("status", "Active").eq("subscription_status", "Active").eq("deployment_type", "Live Auto").execute()
     strat_map = {s['strategy_full_name'].lower().strip(): s for s in strat_res.data if s.get('strategy_full_name')}
+
+    # [FUNCTION CONTRACT & MATH]: Flexible Date String Parser
+    def parse_pdf_date(date_str):
+        # [TECHNICAL]: Parses Tradetron date strings across full month (%B) or abbreviated month (%b) formats.
+        # [TRADING DOMAIN]: Converts human-readable PDF cycle and issue dates into standard ISO dates for database storage.
+        clean_d = re.sub(r'\s+', ' ', date_str.strip())
+        for fmt in ("%d %B %Y", "%d %b %Y"):
+            try:
+                return datetime.strptime(clean_d, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"Unrecognized PDF date format: '{clean_d}'")
 
     for idx, f in enumerate(files):
         file_id, file_name = f['id'], f['name']
@@ -116,111 +136,173 @@ def run_invoice_ingestion():
             text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
 
         # [MODULE/CLASS SSOT ROLE]: Robust PDF Text Parser
-        # [FUNCTION CONTRACT & MATH]: Uses flexible, case-insensitive regex to extract billing metadata from Tradetron PDFs.
+        # [FUNCTION CONTRACT & MATH]: Extracts client identity, invoice ID, HWM, Grand Total, Strategy Full Name, Issue Date, and Cycle Range.
+        # [TECHNICAL]: Uses multiline-safe regex patterns resilient to pdfplumber's spatial column merging.
+        # [TRADING DOMAIN]: Extracts every mandatory billing parameter directly from the Tradetron PDF invoice.
         email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
         inv_match = re.search(r'Invoice\s*no\.?\s*(?:[:\|]\s*)?(\d+)', text, re.IGNORECASE)
         hwm_match = re.search(r'High[- ]water\s*mark\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
         tot_match = re.search(r'Grand\s*Total\s*Rs\.?\s*([\d,.]+)', text, re.IGNORECASE)
-        # [TECHNICAL]: Capture group changed from (.*?) to ([^']*) to greedily capture across newlines and injected garbage.
-        # [TRADING DOMAIN]: Ensures strategy names containing injected monetary amounts (like 'Vedika Rs 519.00 Nifty') are fully captured for later sanitization.
         strat_match = re.search(r"'([^']*)'\s+strategy", text, re.IGNORECASE)
-        cycle_match = re.search(r'Variable\s*Fee\s*Invoice\s*for\s*(.*?\d{4})', text, re.IGNORECASE)
+        cycle_match = re.search(r'Variable\s*Fee\s*Invoice\s*for\s*([0-9]{1,2}\s+[A-Za-z]+\s+\d{4}\s*-\s*[0-9]{1,2}\s+[A-Za-z]+\s+\d{4})', text, re.IGNORECASE)
+        issue_match = re.search(r'Date\s*of\s*issue\s*(?:[:\|]\s*)?([0-9]{1,2}\s+[A-Za-z]+\s+\d{4})', text, re.IGNORECASE)
+        profile_match = re.search(r'BILLED\s+TO(?:\s+INVOICE\s+DETAILS)?\s*\n\s*(.+?)(?:\s+Invoice\s*no\.?|\n)', text, re.IGNORECASE)
 
-        if not (email_match and inv_match and hwm_match and strat_match):
+        if not (email_match and inv_match and hwm_match and strat_match and cycle_match and issue_match):
             print(f"❌ Extraction Failed for {file_name}. Skipping.")
             print(f"--- DEBUG EXTRACTED TEXT START ---\n{text}\n--- DEBUG EXTRACTED TEXT END ---")
             continue
 
-        tt_email = email_match.group(1).lower()
-        inv_no = inv_match.group(1)
+        tt_email = email_match.group(1).lower().strip()
+        inv_no = inv_match.group(1).strip()
+        pdf_profile_name = profile_match.group(1).strip() if profile_match else None
         
         # [TECHNICAL]: Scrubs numeric strings of commas before casting to float.
-        # [TRADING DOMAIN]: Prevents catastrophic failures on high-value HWMs (e.g. Rs 5,190.25).
+        # [TRADING DOMAIN]: Prevents float-casting failures on high-water marks above Rs 999.
         hwm_val = float(hwm_match.group(1).replace(',', ''))
-        pdf_total = float(tot_match.group(1).replace(',', '')) if tot_match else 0.0
+        pdf_total = float(tot_match.group(1).replace(',', '')) if tot_match else None
         
-        # [TECHNICAL]: RegEx substitution dynamically scrubs any nested 'Rs XX.XX' fragments and collapses multi-line text into a single space.
-        # [TRADING DOMAIN]: Rebuilds the true Strategy Name back to 'Vedika Nifty Intraday Buying' so it maps perfectly to the live database lookup.
+        # [TECHNICAL]: Scrubs any column-wrapped 'Rs XX.XX' fragments from the strategy name and normalizes whitespace.
+        # [TRADING DOMAIN]: Reconstructs the exact strategy_full_name (e.g., 'Vedika Nifty Intraday Buying') to match the strategies table.
         raw_strat_name = strat_match.group(1)
         clean_strat_name = re.sub(r'Rs\.?\s*[\d,.]+', '', raw_strat_name, flags=re.IGNORECASE)
-        strat_name = re.sub(r'\s+', ' ', clean_strat_name).strip()
+        strat_full_name = re.sub(r'\s+', ' ', clean_strat_name).strip()
         
-        cycle_str = cycle_match.group(1).strip() if cycle_match else "NA"
+        # [TECHNICAL]: Parses start date, end date, issue date, due date, full month name, and 4-digit year.
+        # [TRADING DOMAIN]: Populates billing_start_date, billing_end_date, due_date, billing_month, and billing_year so algo.html and invoice_generator.html filters and cards work seamlessly.
+        cycle_str = re.sub(r'\s+', ' ', cycle_match.group(1)).strip()
+        start_raw, end_raw = [part.strip() for part in cycle_str.split('-', 1)]
+        start_dt = parse_pdf_date(start_raw)
+        end_dt = parse_pdf_date(end_raw)
+        issue_dt = parse_pdf_date(issue_match.group(1))
+        due_dt = issue_dt + timedelta(days=due_days)
+
+        billing_start_date = start_dt.strftime("%Y-%m-%d")
+        billing_end_date = end_dt.strftime("%Y-%m-%d")
+        due_date_iso = due_dt.strftime("%Y-%m-%d")
+        due_date_display = due_dt.strftime("%d/%m/%Y")
+        billing_month = end_dt.strftime("%B")
+        billing_year = end_dt.strftime("%Y")
         
-        target_strat = strat_map.get(strat_name.lower())
+        target_strat = strat_map.get(strat_full_name.lower())
         if not target_strat:
-            print(f"⚠️ Strategy '{strat_name}' not active in DB. Skipping.")
+            print(f"⚠️ Strategy '{strat_full_name}' not active in DB. Skipping.")
             continue
 
-        # [TECHNICAL]: Execute mathematical tax calculations.
-        # [TRADING DOMAIN]: Replicates exact Node.js backend math to calculate user dues.
+        canonical_strat_full_name = target_strat['strategy_full_name'].strip()
+
+        # [TECHNICAL]: Executes mathematical tax calculations using platform_profile rates.
+        # [TRADING DOMAIN]: Calculates base performance fee, SGST, CGST, and rounded final INR total.
         fee_pct = float(target_strat['monthly_fees'])
         base_fee = hwm_val * fee_pct
         sgst = base_fee * sgst_pct
         cgst = base_fee * cgst_pct
         final_inr = round(base_fee + sgst + cgst)
 
-        # [TECHNICAL]: Dynamic identity bridging.
-        # [TRADING DOMAIN]: Ensures bills correctly attach to internal Website accounts without generating duplicate fractured 'NA' rows for active users.
+        # [TECHNICAL]: Queries tradetron_active_subscribers for identity bridging without touching subscriber_vault.
+        # [TRADING DOMAIN]: Links the invoice to the client's website user_email and Telegram chat ID if mapped, or keeps user_email='NA' until they claim it via OTP on algo.html.
         subs_table = get_table('tradetron_active_subscribers')
         id_res = supabase.table(subs_table).select("user_email,tt_profile_name").eq("tradetron_user_id", tt_email).execute()
         
         user_email = 'NA'
         tg_chat_id = 'NA'
         tg_username = None
-        tt_profile = 'NA'
+        tt_profile = pdf_profile_name if pdf_profile_name else 'NA'
 
         if id_res.data:
-            rec = id_res.data[0]
-            tt_profile = rec.get('tt_profile_name', 'NA')
-            if rec.get('user_email') and rec.get('user_email') != 'NA':
-                user_email = rec['user_email']
+            for rec in id_res.data:
+                if rec.get('tt_profile_name') and rec.get('tt_profile_name') != 'NA':
+                    tt_profile = rec['tt_profile_name']
+                if rec.get('user_email') and rec.get('user_email') != 'NA':
+                    user_email = rec['user_email']
+                    break
+            if user_email != 'NA':
                 reg_res = supabase.table("user_registry").select("telegram_chat_id,telegram_username").eq("email", user_email).execute()
                 if reg_res.data:
-                    tg_chat_id = reg_res.data[0].get("telegram_chat_id", 'NA')
+                    tg_chat_id = reg_res.data[0].get("telegram_chat_id") or 'NA'
                     tg_username = reg_res.data[0].get("telegram_username")
 
+        # [TECHNICAL]: Deterministic batch hash per user and cycle string.
+        # [TRADING DOMAIN]: Groups invoices from the same cycle while ensuring two different unmapped users ('NA') never collide on (user_email, strategy_id, invoice_batch_id).
         batch_hash_str = f"{tt_email}_{cycle_str}"
         batch_id = 'INV-' + hashlib.md5(batch_hash_str.encode()).hexdigest()[:8].upper()
+        now_iso = datetime.utcnow().isoformat() + "Z"
         
         ledger_payload = {
-            "user_email": user_email, "tt_email_id": tt_email, "tt_profile_name": tt_profile,
-            "telegram_username": tg_username, "telegram_chat_id": tg_chat_id,
-            "strategy_name": strat_name, "strategy_id": target_strat['strategy_id'],
-            "invoice_batch_id": batch_id, "external_invoice_id": inv_no,
-            "billing_month": cycle_str[:3].upper() if cycle_str != "NA" else "NA",
-            "billing_year": cycle_str[-4:] if cycle_str != "NA" else "NA",
-            "high_water_mark": hwm_val, "cycle_profit": hwm_val,
-            "fee_percentage": fee_pct, "base_fee": base_fee,
-            "sgst_amount": sgst, "cgst_amount": cgst,
-            "final_inr_amount": final_inr, "payment_status": "Unpaid", "invoice_status": "Sent",
-            "invoice_generated_at": datetime.now().isoformat()
+            "user_email": user_email,
+            "tt_email_id": tt_email,
+            "tt_profile_name": tt_profile,
+            "telegram_username": tg_username,
+            "telegram_chat_id": tg_chat_id,
+            "strategy_name": canonical_strat_full_name,
+            "strategy_id": target_strat['strategy_id'],
+            "invoice_batch_id": batch_id,
+            "external_invoice_id": inv_no,
+            "billing_start_date": billing_start_date,
+            "billing_end_date": billing_end_date,
+            "due_date": due_date_iso,
+            "billing_month": billing_month,
+            "billing_year": billing_year,
+            "high_water_mark": hwm_val,
+            "cycle_profit": hwm_val,
+            "fee_percentage": fee_pct,
+            "base_fee": base_fee,
+            "sgst_amount": sgst,
+            "cgst_amount": cgst,
+            "final_inr_amount": final_inr,
+            "payment_status": "Unpaid",
+            "invoice_status": "Sent",
+            "invoice_generated_at": now_iso,
+            "invoice_sent_at": now_iso,
+            "last_updated_at": now_iso
         }
 
-
+        # [MODULE/CLASS SSOT ROLE]: Idempotent Ledger Upsert via Verified Schema Constraints
+        # [FUNCTION CONTRACT & MATH]: Upserts on external_invoice_id (or updates existing row if re-ingested) while preserving Paid status.
+        # [TECHNICAL]: Checks if external_invoice_id already exists; if already Paid, skips overwriting payment_status; otherwise upserts on the exact composite PK (user_email, strategy_id, invoice_batch_id).
+        # [TRADING DOMAIN]: Guarantees idempotent PDF ingestion aligned with strategy_ledger_pkey and strategy_ledger_dev_pkey.
         ledger_table = get_table('strategy_ledger')
-        check_res = supabase.table(ledger_table).select("id").eq("external_invoice_id", inv_no).execute()
+        existing_inv = supabase.table(ledger_table).select("external_invoice_id,payment_status").eq("external_invoice_id", inv_no).execute()
+        if existing_inv.data and existing_inv.data[0].get("payment_status") == "Paid":
+            print(f"ℹ️ Invoice {inv_no} is already marked Paid in {ledger_table}. Moving file without re-billing.")
+            requests.patch(f"https://www.googleapis.com/drive/v3/files/{file_id}?addParents={DEST_FOLDER}&removeParents={SOURCE_FOLDER}", headers=headers)
+            continue
+
+        supabase.table(ledger_table).upsert(
+            ledger_payload,
+            on_conflict="user_email,strategy_id,invoice_batch_id"
+        ).execute()
         
-        if check_res.data and len(check_res.data) > 0:
-            target_id = check_res.data[0]['id']
-            supabase.table(ledger_table).update(ledger_payload).eq("id", target_id).execute()
-        else:
-            supabase.table(ledger_table).insert(ledger_payload).execute()
-        
-        # [TECHNICAL]: Notifications engine
-        # [TRADING DOMAIN]: Sends localized alerts pointing the user to the correct environment dashboard.
+        # [TECHNICAL]: Dispatches rich HTML notification via Telegram, falling back to Resend Email.
+        # [TRADING DOMAIN]: Sends instant billing breakdown and dashboard settlement link to the client.
         dashboard_url = "https://ensuringsuccess.in/algo#billing" if ENVIRONMENT == "production" else "https://dev.ensuringsuccess.in/algo#billing"
         prefix = "" if ENVIRONMENT == "production" else "[DEV] "
         amt_fmt = f"₹{final_inr:,.2f}"
 
-        tg_msg = f"🧾 <b>{prefix}Invoice Generated</b>\n━━━━━━━━━━━━━━\n👤 <b>Profile:</b> {tt_profile}\n📧 <b>Email:</b> {tt_email}\n📦 <b>Batch:</b> <code>{batch_id}</code>\n🔖 <b>Ext ID:</b> <code>{inv_no}</code>\n🔄 <b>Cycle:</b> {cycle_str}\n🎯 <b>Strategy:</b> {strat_name}\n\n<b>Calculation Breakdown:</b>\n• HWM Profit: ₹{hwm_val}\n• Base Fee ({(fee_pct*100):.1f}%): ₹{base_fee:.2f}\n• GST: ₹{(sgst+cgst):.2f}\n\n💰 <b>Total Due:</b> {amt_fmt}\n\n<a href='{dashboard_url}'>💳 Settle Securely via Dashboard</a>"
+        tg_msg = (
+            f"🧾 <b>{prefix}Invoice Generated</b>\n━━━━━━━━━━━━━━\n"
+            f"👤 <b>Profile:</b> {tt_profile}\n"
+            f"📧 <b>Email:</b> {tt_email}\n"
+            f"📦 <b>Batch:</b> <code>{batch_id}</code>\n"
+            f"🔖 <b>Ext ID:</b> <code>{inv_no}</code>\n"
+            f"🔄 <b>Cycle:</b> {cycle_str}\n"
+            f"🎯 <b>Strategy:</b> {canonical_strat_full_name}\n\n"
+            f"<b>Calculation Breakdown:</b>\n"
+            f"• HWM Profit: ₹{hwm_val:,.2f}\n"
+            f"• Base Fee ({(fee_pct*100):.1f}%): ₹{base_fee:,.2f}\n"
+            f"• GST: ₹{(sgst+cgst):,.2f}\n\n"
+            f"💰 <b>Total Due:</b> {amt_fmt}\n"
+            f"📅 <b>Due Date:</b> {due_date_display}\n\n"
+            f"<a href='{dashboard_url}'>💳 Settle Securely via Dashboard</a>"
+        )
         
         if not send_telegram(tg_chat_id, tg_msg):
-            send_email(user_email if user_email != 'NA' else tt_email, f"{prefix}Action Required: Invoice {inv_no} Generated", tg_msg.replace('\n', '<br>'))
+            target_recipient = user_email if user_email != 'NA' else tt_email
+            send_email(target_recipient, f"{prefix}Action Required: Invoice {inv_no} Generated", tg_msg.replace('\n', '<br>'))
 
-        # [TECHNICAL]: Move file out of source directory
-        # [TRADING DOMAIN]: Archives the processed PDF so it is not double-processed on the next run.
-        print(f"✅ Ingested Invoice {inv_no}. Moving file.")
+        # [TECHNICAL]: Moves processed PDF from SOURCE_FOLDER to DEST_FOLDER in Google Drive.
+        # [TRADING DOMAIN]: Archives the ingested invoice so subsequent workflow runs do not re-process it.
+        print(f"✅ Ingested Invoice {inv_no} ({canonical_strat_full_name}) -> Batch {batch_id}. Moving file.")
         requests.patch(f"https://www.googleapis.com/drive/v3/files/{file_id}?addParents={DEST_FOLDER}&removeParents={SOURCE_FOLDER}", headers=headers)
 
 if __name__ == "__main__":
