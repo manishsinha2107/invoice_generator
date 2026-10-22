@@ -57,14 +57,18 @@ def get_drive_token():
     creds.refresh(auth_request)
     return creds.token
 
-# --- AFTER (PATCHED CODE | File: invoice_ingestor.py | Lines 53 to 79) ---
 # [FUNCTION CONTRACT & MATH]: Telegram Dispatcher
-def send_telegram(chat_id, text):
-    # [TECHNICAL]: Validates HTTP status code from Telegram Bot API instead of blindly returning True or silently swallowing errors.
+# --- AFTER (PATCHED CODE | File: invoice_ingestor.py | Lines 53 to 64) ---
+# [FUNCTION CONTRACT & MATH]: Telegram Dispatcher
+def send_telegram(chat_id, text, reply_markup=None):
+    # [TECHNICAL]: Validates HTTP status code from Telegram Bot API and supports optional inline keyboards.
     # [TRADING DOMAIN]: Ensures failed Telegram alerts accurately trigger the Resend email fallback so clients never miss an invoice.
     if not chat_id or chat_id == 'NA' or not TELEGRAM_BOT_TOKEN: return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    res = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True})
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    res = requests.post(url, json=payload)
     if not res.ok:
         print(f"⚠️ Telegram API Error ({res.status_code}): {res.text}")
         return False
@@ -273,9 +277,10 @@ def run_invoice_ingestion():
             on_conflict="user_email,strategy_id,invoice_batch_id"
         ).execute()
         
-        # [TECHNICAL]: Dispatches rich HTML notification via Telegram, falling back to Resend Email.
-        # [TRADING DOMAIN]: Sends instant billing breakdown and dashboard settlement link to the client.
+        # [TECHNICAL]: Decouples email and Telegram templates to support rich HTML button styling.
+        # [TRADING DOMAIN]: Drives users to the auto-reconciling dashboard while providing strict warnings for the manual Razorpay fallback.
         dashboard_url = "https://ensuringsuccess.in/algo#billing" if ENVIRONMENT == "production" else "https://dev.ensuringsuccess.in/algo#billing"
+        razorpay_url = "https://razorpay.me/@ensuringsucces"
         prefix = "" if ENVIRONMENT == "production" else "[DEV] "
         amt_fmt = f"₹{final_inr:,.2f}"
 
@@ -293,12 +298,44 @@ def run_invoice_ingestion():
             f"• GST: ₹{(sgst+cgst):,.2f}\n\n"
             f"💰 <b>Total Due:</b> {amt_fmt}\n"
             f"📅 <b>Due Date:</b> {due_date_display}\n\n"
-            f"<a href='{dashboard_url}'>💳 Settle Securely via Dashboard</a>"
+            f"💡 <b>PREFERRED:</b> Pay directly via your billing dashboard for an instantly auto-reconciled, seamless experience.\n\n"
+            f"⚠️ <b>USING DIRECT PAYMENT LINK?</b>\n"
+            f"If paying via Razorpay directly, you MUST enter your Ext ID (<code>{inv_no}</code>) in the 'Add a note' field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access."
         )
+
+        tg_markup = {
+            "inline_keyboard": [
+                [{"text": "💳 Settle Securely via Dashboard", "url": dashboard_url}],
+                [{"text": "🔗 Pay via Direct Razorpay Link", "url": razorpay_url}]
+            ]
+        }
         
-        if not send_telegram(tg_chat_id, tg_msg):
+        em_html = f"""
+        <div style="font-family:sans-serif; max-width:600px; border:1px solid #e2e8f0; border-radius:12px; padding:24px; color:#1e293b;">
+            <h2 style="color:#0f172a; margin-top:0;">{prefix}Invoice Generated</h2>
+            <table style="width:100%; font-size:14px; margin-bottom:20px;">
+                <tr><td style="padding:4px 0; color:#64748b;">Profile:</td><td style="text-align:right; font-weight:bold;">{tt_profile}</td></tr>
+                <tr><td style="padding:4px 0; color:#64748b;">Batch ID:</td><td style="text-align:right; font-family:monospace;">{batch_id}</td></tr>
+                <tr><td style="padding:4px 0; color:#64748b;">Ext ID:</td><td style="text-align:right; font-family:monospace; color:#059669; font-weight:bold;">{inv_no}</td></tr>
+                <tr><td style="padding:4px 0; color:#64748b;">Strategy:</td><td style="text-align:right;">{canonical_strat_full_name}</td></tr>
+                <tr><td style="padding:4px 0; color:#64748b;">Total Due:</td><td style="text-align:right; font-weight:black; font-size:16px;">{amt_fmt}</td></tr>
+                <tr><td style="padding:4px 0; color:#64748b;">Due Date:</td><td style="text-align:right; color:#e11d48; font-weight:bold;">{due_date_display}</td></tr>
+            </table>
+            
+            <p style="font-size:13px; color:#0f172a; font-weight:bold; margin-bottom:10px;">💡 PREFERRED: Pay directly via your billing dashboard for an instantly auto-reconciled, seamless experience.</p>
+            <a href="{dashboard_url}" style="display:block; text-align:center; background:#059669; color:#ffffff; padding:14px; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px;">💳 Settle Securely via Dashboard</a>
+            
+            <div style="background:#fffbeb; border:1px solid #fbbf24; padding:15px; border-radius:8px; margin-top:24px;">
+                <p style="font-size:13px; color:#d97706; font-weight:bold; margin-top:0;">⚠️ USING DIRECT PAYMENT LINK?</p>
+                <p style="font-size:12px; color:#92400e; margin-bottom:15px;">If paying via Razorpay directly, you MUST enter your Ext ID (<strong>{inv_no}</strong>) in the "Add a note" field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access.</p>
+                <a href="{razorpay_url}" style="display:block; text-align:center; background:#ffffff; color:#64748b; border:1px solid #cbd5e1; padding:12px; text-decoration:none; border-radius:8px; font-weight:bold; font-size:13px;">🔗 Pay via Direct Razorpay Link</a>
+            </div>
+        </div>
+        """
+
+        if not send_telegram(tg_chat_id, tg_msg, tg_markup):
             target_recipient = user_email if user_email != 'NA' else tt_email
-            send_email(target_recipient, f"{prefix}Action Required: Invoice {inv_no} Generated", tg_msg.replace('\n', '<br>'))
+            send_email(target_recipient, f"{prefix}Action Required: Invoice {inv_no} Generated", em_html)
 
         # [TECHNICAL]: Moves processed PDF from SOURCE_FOLDER to DEST_FOLDER in Google Drive.
         # [TRADING DOMAIN]: Archives the ingested invoice so subsequent workflow runs do not re-process it.
