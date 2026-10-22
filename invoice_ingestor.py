@@ -289,7 +289,7 @@ def run_invoice_ingestion():
             f"👤 <b>Profile:</b> {tt_profile}\n"
             f"📧 <b>Email:</b> {tt_email}\n"
             f"📦 <b>Batch:</b> <code>{batch_id}</code>\n"
-            f"🔖 <b>Ext ID:</b> <code>{inv_no}</code>\n"
+            f"🔖 <b>Tradetron Invoice No.:</b> <code>{inv_no}</code>\n"
             f"🔄 <b>Cycle:</b> {cycle_str}\n"
             f"🎯 <b>Strategy:</b> {canonical_strat_full_name}\n\n"
             f"<b>Calculation Breakdown:</b>\n"
@@ -300,7 +300,7 @@ def run_invoice_ingestion():
             f"📅 <b>Due Date:</b> {due_date_display}\n\n"
             f"💡 <b>PREFERRED:</b> Pay directly via your billing dashboard for an instantly auto-reconciled, seamless experience.\n\n"
             f"⚠️ <b>USING DIRECT PAYMENT LINK?</b>\n"
-            f"If paying via Razorpay directly, you MUST enter your Ext ID (<code>{inv_no}</code>) in the 'Add a note' field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access."
+            f"If paying via Razorpay directly, you MUST enter your Tradetron Invoice No. (<code>{inv_no}</code>) in the 'Add a note' field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access."
         )
 
         tg_markup = {
@@ -316,7 +316,7 @@ def run_invoice_ingestion():
             <table style="width:100%; font-size:14px; margin-bottom:20px;">
                 <tr><td style="padding:4px 0; color:#64748b;">Profile:</td><td style="text-align:right; font-weight:bold;">{tt_profile}</td></tr>
                 <tr><td style="padding:4px 0; color:#64748b;">Batch ID:</td><td style="text-align:right; font-family:monospace;">{batch_id}</td></tr>
-                <tr><td style="padding:4px 0; color:#64748b;">Ext ID:</td><td style="text-align:right; font-family:monospace; color:#059669; font-weight:bold;">{inv_no}</td></tr>
+                <tr><td style="padding:4px 0; color:#64748b;">Tradetron Invoice No.:</td><td style="text-align:right; font-family:monospace; color:#059669; font-weight:bold;">{inv_no}</td></tr>
                 <tr><td style="padding:4px 0; color:#64748b;">Strategy:</td><td style="text-align:right;">{canonical_strat_full_name}</td></tr>
                 <tr><td style="padding:4px 0; color:#64748b;">Total Due:</td><td style="text-align:right; font-weight:black; font-size:16px;">{amt_fmt}</td></tr>
                 <tr><td style="padding:4px 0; color:#64748b;">Due Date:</td><td style="text-align:right; color:#e11d48; font-weight:bold;">{due_date_display}</td></tr>
@@ -327,7 +327,7 @@ def run_invoice_ingestion():
             
             <div style="background:#fffbeb; border:1px solid #fbbf24; padding:15px; border-radius:8px; margin-top:24px;">
                 <p style="font-size:13px; color:#d97706; font-weight:bold; margin-top:0;">⚠️ USING DIRECT PAYMENT LINK?</p>
-                <p style="font-size:12px; color:#92400e; margin-bottom:15px;">If paying via Razorpay directly, you MUST enter your Ext ID (<strong>{inv_no}</strong>) in the "Add a note" field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access.</p>
+                <p style="font-size:12px; color:#92400e; margin-bottom:15px;">If paying via Razorpay directly, you MUST enter your Tradetron Invoice No. (<strong>{inv_no}</strong>) in the "Add a note" field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access.</p>
                 <a href="{razorpay_url}" style="display:block; text-align:center; background:#ffffff; color:#64748b; border:1px solid #cbd5e1; padding:12px; text-decoration:none; border-radius:8px; font-weight:bold; font-size:13px;">🔗 Pay via Direct Razorpay Link</a>
             </div>
         </div>
