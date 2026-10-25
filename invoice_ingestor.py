@@ -280,7 +280,7 @@ def run_invoice_ingestion():
         # [TECHNICAL]: Decouples email and Telegram templates to support rich HTML button styling.
         # [TRADING DOMAIN]: Drives users to the auto-reconciling dashboard while providing strict warnings for the manual Razorpay fallback.
         dashboard_url = "https://ensuringsuccess.in/algo#billing" if ENVIRONMENT == "production" else "https://dev.ensuringsuccess.in/algo#billing"
-        razorpay_url = "https://razorpay.me/@ensuringsucces"
+        razorpay_url = "https://razorpay.me/@ensuringsuccesscapital"
         prefix = "" if ENVIRONMENT == "production" else "[DEV] "
         amt_fmt = f"₹{final_inr:,.2f}"
 
