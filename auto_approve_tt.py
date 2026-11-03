@@ -27,9 +27,9 @@ def log(msg: str) -> None:
 
 
 # [FUNCTION CONTRACT & MATH]: Dispatches HTTP POST payload to `https://ensuringsuccess.in/notifier` upon verified Tradetron approval.
-def notify_approval(user_email: str, tt_email: str, tt_profile: str, strategy_name: str, ref_id: str, tg_chat_id: str, tg_username: str) -> None:
-    # [TECHNICAL]: Construct JSON body for `SUBSCRIPTION_APPROVED` and send via `urllib.request.urlopen`.
-    # [TRADING DOMAIN]: Sends instant approval confirmation to the subscriber and Admin Telegram channel.
+def notify_approval(user_email: str, tt_email: str, tt_profile: str, strategy_name: str, ref_id: str, tg_chat_id: str, tg_username: str, strategy_link: str) -> None:
+    # [MODULE/CLASS SSOT ROLE]: Notification Dispatcher with Dynamic Strategy Link Payload Contract.
+    # [FUNCTION CONTRACT & MATH]: Injects `strategy_link` into the POST payload dispatched to `/notifier` for verified approvals.
     payload = {
         "action": "SUBSCRIPTION_APPROVED",
         "user": {
@@ -41,7 +41,8 @@ def notify_approval(user_email: str, tt_email: str, tt_profile: str, strategy_na
         "data": {
             "tt_profile": tt_profile,
             "strategy_name": strategy_name,
-            "ref_id": ref_id
+            "ref_id": ref_id,
+            "strategy_link": strategy_link
         }
     }
     req = urllib.request.Request(
@@ -135,12 +136,20 @@ async def run_auto_approver() -> None:
                 "approved_at": datetime.now(timezone.utc).isoformat()
             }).eq("id", row_id).execute()
 
+            # [TECHNICAL]: Query `strategies` table to retrieve canonical `strategy_link` for Live Auto deployment[cite: 7].
+            # [TRADING DOMAIN]: Guarantees we resolve the exact Tradetron strategy URL from the SSOT catalog table[cite: 7].
+            strat_res = sb.table("strategies").select("strategy_link").eq("status", "Active").eq("subscription_status", "Active").eq("deployment_type", "Live Auto").eq("strategy_full_name", strat_name).execute()
+            strat_rows = strat_res.data or []
+            if not strat_rows or not strat_rows[0].get("strategy_link"):
+                raise RuntimeError(f"CRITICAL: Active Live Auto strategy link not found in strategies table for '{strat_name}'[cite: 7].")
+            strategy_link = strat_rows[0]["strategy_link"]
+
             reg_res = sb.table("user_registry").select("telegram_chat_id, telegram_username").eq("email", user_email).execute()
             reg_rows = reg_res.data or []
             tg_chat_id = reg_rows[0]["telegram_chat_id"] if reg_rows else "NA"
             tg_username = reg_rows[0]["telegram_username"] if reg_rows else None
 
-            notify_approval(user_email, tt_email, tt_profile, strat_name, ref_id, tg_chat_id, tg_username)
+            notify_approval(user_email, tt_email, tt_profile, strat_name, ref_id, tg_chat_id, tg_username, strategy_link)
 
         await context.close()
         await browser.close()
