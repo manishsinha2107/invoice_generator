@@ -1,0 +1,38 @@
+# [MODULE/CLASS SSOT ROLE]: Event-Driven GitHub Actions Workflow (`auto_approve_tt.yml`) invoked via `workflow_dispatch` by `algo_api.js`.
+# [FUNCTION CONTRACT & MATH]: Provisions Python 3.11 + Playwright Chromium, injects Supabase & Creator Tradetron secrets, and executes `auto_approve_tt.py`.
+name: Auto Approve Tradetron Subscriptions
+
+on:
+  # [TECHNICAL]: Enable `workflow_dispatch` so Cloudflare Worker (`algo_api.js`) can trigger this workflow via GitHub REST API.
+  # [TRADING DOMAIN]: Runs only when a subscriber links their Tradetron account (zero wasted cron polling).
+  workflow_dispatch:
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # [TECHNICAL]: Checkout repository, configure Python 3.11, and install `playwright`, `supabase`, and `python-dotenv`.
+      # [TRADING DOMAIN]: Prepares headless Chromium browser environment for Tradetron login and approval submission.
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: |
+          pip install playwright supabase python-dotenv
+          playwright install --with-deps chromium
+
+      # [TECHNICAL]: Execute `auto_approve_tt.py` with repository secrets `SUPABASE_URL`, `SUPABASE_KEY`, `TT_CREATOR_EMAIL`, and `TT_CREATOR_PASSWORD`.
+      # [TRADING DOMAIN]: Logs into Tradetron and approves all `READY_TO_APPROVE` rows in `tradetron_approval_queue`.
+      - name: Run Tradetron Auto-Approver
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TT_CREATOR_EMAIL: ${{ secrets.TT_CREATOR_EMAIL }}
+          TT_CREATOR_PASSWORD: ${{ secrets.TT_CREATOR_PASSWORD }}
+        run: python auto_approve_tt.py
