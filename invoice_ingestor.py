@@ -277,10 +277,11 @@ def run_invoice_ingestion():
             on_conflict="user_email,strategy_id,invoice_batch_id"
         ).execute()
         
-        # [TECHNICAL]: Decouples email and Telegram templates to support rich HTML button styling.
-        # [TRADING DOMAIN]: Drives users to the auto-reconciling dashboard while providing strict warnings for the manual Razorpay fallback.
+        # [MODULE/CLASS SSOT ROLE]: Automated Invoice Notification Builder (`invoice_ingestor.py`).
+        # [FUNCTION CONTRACT & MATH]: Constructs Telegram HTML message with single-button `inline_keyboard` and fallback HTML email routing strictly to `dashboard_url`.
+        # [TECHNICAL]: Build `tg_msg`, `tg_markup`, and `em_html` pointing exclusively to `dashboard_url` (`algo#billing`).
+        # [BUSINESS / DOMAIN LOGIC]: Directs all linked subscribers to settle invoices via the website billing terminal for guaranteed automatic Razorpay reconciliation.
         dashboard_url = "https://ensuringsuccess.in/algo#billing" if ENVIRONMENT == "production" else "https://dev.ensuringsuccess.in/algo#billing"
-        razorpay_url = "https://razorpay.me/@ensuringsuccesscapital"
         prefix = "" if ENVIRONMENT == "production" else "[DEV] "
         amt_fmt = f"₹{final_inr:,.2f}"
 
@@ -298,15 +299,12 @@ def run_invoice_ingestion():
             f"• GST: ₹{(sgst+cgst):,.2f}\n\n"
             f"💰 <b>Total Due:</b> {amt_fmt}\n"
             f"📅 <b>Due Date:</b> {due_date_display}\n\n"
-            f"💡 <b>PREFERRED:</b> Pay directly via your billing dashboard for an instantly auto-reconciled, seamless experience.\n\n"
-            f"⚠️ <b>USING DIRECT PAYMENT LINK?</b>\n"
-            f"If paying via Razorpay directly, you MUST enter your Tradetron Invoice No. (<code>{inv_no}</code>) in the 'Add a note' field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access."
+            f"Please settle your pending invoice via the billing dashboard before the due date to ensure uninterrupted Tradetron strategy access."
         )
 
         tg_markup = {
             "inline_keyboard": [
-                [{"text": "💳 Settle Securely via Dashboard", "url": dashboard_url}],
-                [{"text": "🔗 Pay via Direct Razorpay Link", "url": razorpay_url}]
+                [{"text": "💳 Settle Securely via Dashboard", "url": dashboard_url}]
             ]
         }
         
@@ -322,14 +320,8 @@ def run_invoice_ingestion():
                 <tr><td style="padding:4px 0; color:#64748b;">Due Date:</td><td style="text-align:right; color:#e11d48; font-weight:bold;">{due_date_display}</td></tr>
             </table>
             
-            <p style="font-size:13px; color:#0f172a; font-weight:bold; margin-bottom:10px;">💡 PREFERRED: Pay directly via your billing dashboard for an instantly auto-reconciled, seamless experience.</p>
+            <p style="font-size:13px; color:#0f172a; margin-bottom:15px;">Please settle your pending invoice via the billing dashboard before the due date to ensure uninterrupted Tradetron strategy access.</p>
             <a href="{dashboard_url}" style="display:block; text-align:center; background:#059669; color:#ffffff; padding:14px; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px;">💳 Settle Securely via Dashboard</a>
-            
-            <div style="background:#fffbeb; border:1px solid #fbbf24; padding:15px; border-radius:8px; margin-top:24px;">
-                <p style="font-size:13px; color:#d97706; font-weight:bold; margin-top:0;">⚠️ USING DIRECT PAYMENT LINK?</p>
-                <p style="font-size:12px; color:#92400e; margin-bottom:15px;">If paying via Razorpay directly, you MUST enter your Tradetron Invoice No. (<strong>{inv_no}</strong>) in the "Add a note" field for payment reconciliation. Missing this ID will result in an untracked payment and risk the suspension of your Tradetron strategy access.</p>
-                <a href="{razorpay_url}" style="display:block; text-align:center; background:#ffffff; color:#64748b; border:1px solid #cbd5e1; padding:12px; text-decoration:none; border-radius:8px; font-weight:bold; font-size:13px;">🔗 Pay via Direct Razorpay Link</a>
-            </div>
         </div>
         """
 
