@@ -192,24 +192,36 @@ async def run_session_keeper() -> None:
                 if UUID_REGEX.match(s_code) and "/regenerate-token/shared-access/" not in cur_url:
                     log(f"Auto-claiming pending 1-click code for {row.get('user_id')} ({row.get('broker_name')}) in {vault_table}...")
                     try:
-                        resolved_url = claim_and_resolve_url_via_http(cookie_header_str, xsrf_decoded, s_code)
+                        # [TECHNICAL]: First ensure the code is claimed via `/user/manage/access/add/code` (ignoring error if already claimed earlier).
+                        # [TRADING DOMAIN]: Guarantees the broker appears in `Shared with me -> Brokers` even if the website already claimed the UUID.
+                        try:
+                            resolved_url = claim_and_resolve_url_via_http(cookie_header_str, xsrf_decoded, s_code)
+                        except Exception as http_err:
+                            log(f"HTTP add/code note (may already be claimed): {http_err}")
+                            resolved_url = "PENDING_CLAIM"
+
+                        # [TECHNICAL]: If HTTP modal probing did not yield `/regenerate-token/shared-access/`, click `.tokenRegen` directly inside Playwright DOM on `/user/manage/access` and extract the modal `href`.
+                        # [TRADING DOMAIN]: Uses the real browser DOM to open the "Regenerate Broker Token" modal and capture the exact `/shared-access/{broker_id}/{tt_user_id}` URL.
                         if "/regenerate-token/shared-access/" not in resolved_url:
-                            # Fallback: inspect the page DOM directly via Playwright to grab the modal link
                             await page.goto("https://tradetron.tech/user/manage/access", wait_until="networkidle", timeout=60000)
+                            await page.wait_for_timeout(2000)
                             regen_btn = page.locator("button.tokenRegen").last
-                            if await regen_btn.is_visible(timeout=5000):
+                            if await regen_btn.is_visible(timeout=8000):
                                 await regen_btn.click()
                                 modal_link = page.locator('a[href*="/regenerate-token/shared-access/"]').first
-                                await modal_link.wait_for(state="visible", timeout=10000)
+                                await modal_link.wait_for(state="visible", timeout=15000)
                                 href_val = await modal_link.get_attribute("href")
                                 if href_val:
-                                    resolved_url = href_val
+                                    resolved_url = href_val.strip()
 
-                        sb.table(vault_table).update({
-                            "tt_regen_oneclick_url": resolved_url,
-                            "updated_at": datetime.now(timezone.utc).isoformat()
-                        }).eq("id", row["id"]).execute()
-                        log(f"Resolved tt_regen_oneclick_url for {row.get('user_id')}: {resolved_url}")
+                        if "/regenerate-token/shared-access/" in resolved_url:
+                            sb.table(vault_table).update({
+                                "tt_regen_oneclick_url": resolved_url,
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            }).eq("id", row["id"]).execute()
+                            log(f"✅ Resolved tt_regen_oneclick_url for {row.get('user_id')}: {resolved_url}")
+                        else:
+                            log(f"⚠️ Still could not resolve modal link for {row.get('user_id')}; check Shared with me -> Brokers table on Tradetron.")
                     except Exception as claim_err:
                         log(f"Warning: Could not auto-claim {row.get('user_id')}: {claim_err}")
 
