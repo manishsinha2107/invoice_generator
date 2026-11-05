@@ -256,6 +256,7 @@ def run_invoice_ingestion():
             "final_inr_amount": final_inr,
             "payment_status": "Unpaid",
             "invoice_status": "Sent",
+            "tt_sync_status": "Pending",
             "invoice_generated_at": now_iso,
             "invoice_sent_at": now_iso,
             "last_updated_at": now_iso
