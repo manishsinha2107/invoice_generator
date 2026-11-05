@@ -5,9 +5,9 @@
 name: Tradetron Master Session Keeper
 
 on:
-  # [TECHNICAL]: Enable `workflow_dispatch` so `cron-job.org` can trigger this workflow via HTTP POST to the GitHub Actions API.
-  # [TRADING DOMAIN]: Keeps the Master Collector session cookies continuously warm before market open and throughout the day.
   workflow_dispatch:
+  repository_dispatch:
+    types: [trigger_tt_session_keeper]
 
 jobs:
   refresh-session:
