@@ -1,0 +1,37 @@
+# --- AFTER (PATCHED CODE | File: .github/workflows/tt_session_keeper.yml | Lines 1 to 46) ---
+# [MODULE/CLASS SSOT ROLE]: GitHub Actions Workflow (`tt_session_keeper.yml`) for `tt_session_keeper.py`.
+# [FUNCTION CONTRACT & MATH]: Exposes `workflow_dispatch` for external `cron-job.org` triggers (2-3x daily) to keep `tt_collector_session` cookies fresh in Supabase.
+
+name: Tradetron Master Session Keeper
+
+on:
+  # [TECHNICAL]: Enable `workflow_dispatch` so `cron-job.org` can trigger this workflow via HTTP POST to the GitHub Actions API.
+  # [TRADING DOMAIN]: Keeps the Master Collector session cookies continuously warm before market open and throughout the day.
+  workflow_dispatch:
+
+jobs:
+  refresh-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies & Playwright Chromium
+        run: |
+          pip install supabase python-dotenv playwright
+          playwright install --with-deps chromium
+
+      - name: Run Tradetron Session Keeper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TT_CREATOR_EMAIL: ${{ secrets.TT_CREATOR_EMAIL }}
+          TT_CREATOR_PASSWORD: ${{ secrets.TT_CREATOR_PASSWORD }}
+        run: python tt_session_keeper.py
