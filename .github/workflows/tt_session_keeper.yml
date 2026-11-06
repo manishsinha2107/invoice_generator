@@ -23,15 +23,23 @@ jobs:
         with:
           python-version: '3.11'
 
+      # [MODULE/CLASS SSOT ROLE]: Tradetron Master Session Keeper CI Pipeline (`tt_session_keeper.yml`).
+      # [FUNCTION CONTRACT & MATH]: Installs Playwright + AES-GCM crypto dependencies and injects creator credentials + `AUTH_SALT` into the runner environment.
       - name: Install Dependencies & Playwright Chromium
         run: |
-          pip install supabase python-dotenv playwright
+          # [TECHNICAL]: Installs supabase, python-dotenv, playwright, and cryptography explicitly.
+          # [TRADING DOMAIN]: Enables `tt_session_keeper.py` to decrypt `ENCv1:` `shared_broker_code` values in Production `subscriber_vault`.
+          python -m pip install --upgrade pip
+          pip install supabase python-dotenv playwright cryptography
           playwright install --with-deps chromium
 
       - name: Run Tradetron Session Keeper
         env:
+          # [TECHNICAL]: Binds SUPABASE_URL, SUPABASE_KEY, TT_CREATOR_EMAIL, TT_CREATOR_PASSWORD, and AUTH_SALT from repository secrets.
+          # [TRADING DOMAIN]: Provides Master Collector login credentials and AES-256-GCM vault decryption key to `tt_session_keeper.py`.
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TT_CREATOR_EMAIL: ${{ secrets.TT_CREATOR_EMAIL }}
           TT_CREATOR_PASSWORD: ${{ secrets.TT_CREATOR_PASSWORD }}
+          AUTH_SALT: ${{ secrets.AUTH_SALT }}
         run: python tt_session_keeper.py

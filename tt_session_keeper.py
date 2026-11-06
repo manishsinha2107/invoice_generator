@@ -1,7 +1,5 @@
-# --- AFTER (PATCHED CODE | File: tt_session_keeper.py | Lines 1 to 210) ---
-# [MODULE/CLASS SSOT ROLE]: Master Tradetron Collector Session Keeper (`tt_session_keeper.py`).
-# [FUNCTION CONTRACT & MATH]: Authenticates into the Master Tradetron Account via Playwright (solving Altcha), persists fresh `tradetron_session` and `XSRF-TOKEN` cookies into `public.tt_collector_session`, and claims any `PENDING_CLAIM` Shared Broker Codes for active `AUTH_NODE` subscriptions.
-
+# [MODULE/CLASS SSOT ROLE]: Master Tradetron Collector Session Keeper Imports (`tt_session_keeper.py`).
+# [FUNCTION CONTRACT & MATH]: Imports standard, Playwright, Supabase, and `config.py` AES-256-GCM decryption utilities.
 import os
 import re
 import json
@@ -12,6 +10,10 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from playwright.async_api import async_playwright
+
+# [TECHNICAL]: Import `decrypt_account_credentials` from `config.py` SSOT.
+# [TRADING DOMAIN]: Allows `tt_session_keeper.py` to decrypt `ENCv1:` `shared_broker_code` UUIDs stored in Production `subscriber_vault`.
+from config import decrypt_account_credentials
 
 load_dotenv()
 
@@ -71,20 +73,22 @@ def claim_and_resolve_url_via_http(cookie_header: str, xsrf_token: str, shared_c
     if not access_ids:
         return "CLAIMED_SHARED_CODE"
 
+    # [MODULE/CLASS SSOT ROLE]: Tradetron Token Regeneration Modal URL Extractor (`claim_and_resolve_url_via_http`).
+    # [FUNCTION CONTRACT & MATH]: Sends HTTP POST `{"access_id": str(latest_access_id)}` to `/user/manage/access/get/regen/token/modal` and regex-extracts the `/regenerate-token/shared-access/{broker_id}/{tt_user_id}` URL.
     latest_access_id = access_ids[-1]
-    for modal_url in [
-        f"https://tradetron.tech/user/manage/access/regenerate-token/modal/{latest_access_id}",
-        f"https://tradetron.tech/user/manage/access/modal?id={latest_access_id}"
-    ]:
-        try:
-            m_req = urllib.request.Request(modal_url, headers=headers, method="GET")
-            with urllib.request.urlopen(m_req, timeout=20) as m_resp:
-                m_text = m_resp.read().decode("utf-8", errors="ignore").replace("\\/", "/")
-                match = REGEN_URL_REGEX.search(m_text)
-                if match:
-                    return match.group(0)
-        except Exception:
-            continue
+    # [TECHNICAL]: Call verified POST endpoint `https://tradetron.tech/user/manage/access/get/regen/token/modal` matching `vault.js`.
+    # [TRADING DOMAIN]: Directly extracts the permanent 1-Click token regeneration URL from Tradetron's modal JSON payload.
+    modal_req = urllib.request.Request(
+        "https://tradetron.tech/user/manage/access/get/regen/token/modal",
+        data=json.dumps({"access_id": str(latest_access_id)}).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    with urllib.request.urlopen(modal_req, timeout=20) as m_resp:
+        m_text = m_resp.read().decode("utf-8", errors="ignore").replace("\\/", "/")
+        match = REGEN_URL_REGEX.search(m_text)
+        if match:
+            return match.group(0)
 
     return "CLAIMED_SHARED_CODE"
 
@@ -186,7 +190,10 @@ async def run_session_keeper() -> None:
                 .execute()
             )
 
-            for row in (v_res.data or []):
+            for raw_row in (v_res.data or []):
+                # [TECHNICAL]: Decrypt `ENCv1:` fields (`shared_broker_code`) in memory before testing against `UUID_REGEX`.
+                # [TRADING DOMAIN]: Ensures Production rows in `subscriber_vault` (where `shared_broker_code` is AES-256-GCM encrypted by `vault.js`) are properly recognized as 36-char UUIDs and auto-claimed.
+                row = decrypt_account_credentials(raw_row)
                 s_code = (row.get("shared_broker_code") or "").strip()
                 cur_url = (row.get("tt_regen_oneclick_url") or "").strip()
                 if UUID_REGEX.match(s_code) and "/regenerate-token/shared-access/" not in cur_url:
